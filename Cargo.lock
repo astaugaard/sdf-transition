@@ -828,6 +828,7 @@ dependencies = [
  "gif",
  "image",
  "radsort",
+ "rayon",
 ]
 
 [[package]]

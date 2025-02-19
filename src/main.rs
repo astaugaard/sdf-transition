@@ -3,7 +3,8 @@ use std::{borrow::BorrowMut, error::Error, fmt::Display, fs::File, mem};
 use anyhow::{Context, Result};
 use clap::Parser;
 use gif::{Frame, Repeat};
-use image::{GenericImageView, ImageReader, Luma};
+use image::{GenericImageView, ImageReader, Luma, Rgb, RgbImage};
+use rayon::prelude::*;
 
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
@@ -18,6 +19,7 @@ struct Args {
     output: String,
 }
 
+#[derive(Debug)]
 struct SDF {
     data: Vec<f32>,
 }
@@ -58,13 +60,13 @@ fn main() -> Result<()> {
         .with_context(|| "failed to read image1")?
         .decode()
         .with_context(|| "failed to decode image1")?
-        .to_luma16();
+        .into_luma_alpha16();
 
     let image2 = ImageReader::open(image2)
         .with_context(|| "failed to read image2")?
         .decode()
         .with_context(|| "failed to decode image2")?
-        .to_luma16();
+        .into_luma_alpha16();
 
     if image1.width() != image2.width() {
         return Result::Err(
@@ -74,7 +76,7 @@ fn main() -> Result<()> {
 
     if image1.height() != image2.height() {
         return Result::Err(
-            ProgramError::WidthsDifferent(image1.height() as usize, image2.height() as usize)
+            ProgramError::HeightsDifferent(image1.height() as usize, image2.height() as usize)
                 .into(),
         );
     }
@@ -84,7 +86,19 @@ fn main() -> Result<()> {
 
     let sdf1 = generatesdf(&image1);
 
+    println!("sdf1 generated");
+
+    let sdfimg = rendersdf(&sdf1, w as usize);
+
+    sdfimg.save("./sdf1.png").unwrap();
+
     let sdf2 = generatesdf(&image2);
+
+    println!("sdf2 generated");
+
+    let sdfimg2 = rendersdf(&sdf2, w as usize);
+
+    sdfimg2.save("./sdf2.png").unwrap();
 
     let mut output = File::create(output).with_context(|| "failed to create output file")?;
 
@@ -97,9 +111,39 @@ fn main() -> Result<()> {
         .set_repeat(Repeat::Infinite)
         .with_context(|| "failed te set repeat on gif")?;
 
-    lerpsdfs(sdf1, sdf2, &mut output, 60, w, h).with_context(|| "failed to render gif")?;
+    lerpsdfs(sdf1, sdf2, &mut output, 20, w, h).with_context(|| "failed to render gif")?;
 
     Ok(())
+}
+
+fn dist_to_color(dist: f32) -> Rgb<u8> {
+    if dist.abs() <= 0.5 {
+        let brightness = ((dist + 0.5) * 256.0) as u8;
+        Rgb([brightness, brightness, brightness])
+    } else if dist < 0.0 {
+        if dist % 2.0 <= -0.9 {
+            Rgb([0xff, 0xff, 0])
+        } else {
+            Rgb([0xff, 0, 0])
+        }
+    } else {
+        // dist > 0.0
+        if dist % 2.0 >= 0.9 {
+            Rgb([0, 0xff, 0])
+        } else {
+            Rgb([0, 0, 0xff])
+        }
+    }
+}
+
+fn rendersdf(sdf1: &SDF, width: usize) -> RgbImage {
+    let mut img = RgbImage::new(width as u32, (sdf1.data.len() / width) as u32);
+
+    for (img, dist) in img.pixels_mut().zip(sdf1.data.iter()) {
+        *img = dist_to_color(*dist);
+    }
+
+    img
 }
 
 fn lerpsdfs(
@@ -132,6 +176,24 @@ fn lerpsdfs(
     output
         .write_frame(&frame)
         .with_context(|| "failed to add frame to gif")?;
+    output
+        .write_frame(&frame)
+        .with_context(|| "failed to add frame to gif")?;
+    output
+        .write_frame(&frame)
+        .with_context(|| "failed to add frame to gif")?;
+    output
+        .write_frame(&frame)
+        .with_context(|| "failed to add frame to gif")?;
+    output
+        .write_frame(&frame)
+        .with_context(|| "failed to add frame to gif")?;
+    output
+        .write_frame(&frame)
+        .with_context(|| "failed to add frame to gif")?;
+    output
+        .write_frame(&frame)
+        .with_context(|| "failed to add frame to gif")?;
 
     let mut changes_time = changes_time.into_iter().peekable();
 
@@ -159,6 +221,24 @@ fn lerpsdfs(
     output
         .write_frame(&frame)
         .with_context(|| "failed to add frame to gif")?;
+    output
+        .write_frame(&frame)
+        .with_context(|| "failed to add frame to gif")?;
+    output
+        .write_frame(&frame)
+        .with_context(|| "failed to add frame to gif")?;
+    output
+        .write_frame(&frame)
+        .with_context(|| "failed to add frame to gif")?;
+    output
+        .write_frame(&frame)
+        .with_context(|| "failed to add frame to gif")?;
+    output
+        .write_frame(&frame)
+        .with_context(|| "failed to add frame to gif")?;
+    output
+        .write_frame(&frame)
+        .with_context(|| "failed to add frame to gif")?;
 
     Ok(())
 }
@@ -167,12 +247,7 @@ fn render(sdf1: SDF) -> Vec<u8> {
     sdf1.data.iter().map(|f| result_pixel(*f)).collect()
 }
 
-fn add_changes(
-    sdf1: &SDF,
-    sdf2: &SDF,
-    changes_time: &mut Vec<(f32, u8, usize)>,
-    step_size: f32,
-) {
+fn add_changes(sdf1: &SDF, sdf2: &SDF, changes_time: &mut Vec<(f32, u8, usize)>, step_size: f32) {
     for ((i, s), e) in sdf1.data.iter().enumerate().zip(sdf2.data.iter()) {
         add_changes_pixel(*s, *e, changes_time, i, step_size);
     }
@@ -190,7 +265,7 @@ fn result_pixel(p: f32) -> u8 {
     } else if p >= 0.5 {
         0xff
     } else {
-        ((p + 0.5) * 0xff as f32) as u8
+        ((-p + 0.5) * 0xff as f32) as u8
     }
 }
 
@@ -217,13 +292,13 @@ fn add_changes_pixel(
     match &crossings[..] {
         [c] => {
             if s.abs() <= 0.5 {
-                for i in 0..=((c / step_size).floor() as u32) {
+                for i in 0..((c / step_size).floor() as u32) {
                     let i = i as f32 * step_size;
                     changes_time.push((i, lerp_pixel(s, e, i), loc))
                 }
                 changes_time.push((*c, result_pixel(e), loc))
             } else {
-                for i in ((c / step_size).floor() as u32)..=((1.0 / step_size).floor() as u32) {
+                for i in ((c / step_size).floor() as u32)..((1.0 / step_size).ceil() as u32) {
                     let i = i as f32 * step_size;
                     changes_time.push((i, lerp_pixel(s, e, i), loc))
                 }
@@ -238,20 +313,25 @@ fn add_changes_pixel(
                 mem::swap(&mut a, &mut b);
             }
 
-            for i in ((a / step_size).floor() as u32)..=((b / step_size).floor() as u32) {
+            for i in ((a / step_size).floor() as u32)..((b / step_size).ceil() as u32) {
                 let i = i as f32 * step_size;
                 changes_time.push((i, lerp_pixel(s, e, i), loc))
             }
             changes_time.push((b, result_pixel(e), loc))
         }
-        _ => panic!("not possible"),
+        [] => {}
+        _ => {
+            dbg!(crossings);
+            panic!("not possible")
+        }
     }
 }
 
-fn generatesdf(image: &image::ImageBuffer<image::Luma<u16>, Vec<u16>>) -> SDF {
+fn generatesdf(image: &image::ImageBuffer<image::LumaA<u16>, Vec<u16>>) -> SDF {
     SDF {
         data: image
             .enumerate_pixels()
+            // .par_bridge()
             .map(|(x, y, p)| distance(x, y, *p, image))
             .collect(),
     }
@@ -262,23 +342,25 @@ const NUM_ANGLES: u32 = 60;
 fn distance(
     x: u32,
     y: u32,
-    p: Luma<u16>,
-    image: &image::ImageBuffer<image::Luma<u16>, Vec<u16>>,
+    p: image::LumaA<u16>,
+    image: &image::ImageBuffer<image::LumaA<u16>, Vec<u16>>,
 ) -> f32 {
-    if p[0] < 0xffff && 0x0000 < p[0] {
-        return (p[0] as f32 - 0xffff as f32 / 2.0) / 0xffff as f32;
+    if p[1] < 0xffffu16 && 0x0000u16 < p[1] {
+        return (p[1] as f32 - (0xffff as f32 / 2.0)) / 0xffff as f32;
     }
 
     (0..NUM_ANGLES)
+        .into_par_iter() // parrell here is slower
         .map(|i| {
-            let a = i as f32 / NUM_ANGLES as f32;
+            let a = i as f32 / NUM_ANGLES as f32 * std::f32::consts::PI;
             let dx = a.cos();
             let dy = a.sin();
 
-            let d: f32 = raycast_distance(x, y, dx, dy, p[0], image, image.width(), image.height());
+            let d: f32 = raycast_distance(x, y, dx, dy, p[1], image, image.width(), image.height());
             d
         })
-        .fold(f32::MAX, |a, b| a.min(b))
+        // .fold(f32::MAX, |a, b| a.min(b))
+        .reduce(|| f32::MAX, |a, b| a.min(b))
 }
 
 struct PixelRay {
@@ -295,15 +377,11 @@ impl Iterator for PixelRay {
     type Item = (u32, u32, u32);
 
     fn next(&mut self) -> Option<Self::Item> {
-        let cx = self.x.round();
-        let cy = self.y.round();
+        let cx = self.x.round() as i32;
+        let cy = self.y.round() as i32;
         let cd = self.d;
 
-        if self.x > (self.w as f32 - 0.5)
-            || self.x < 0.0
-            || self.y < 0.0
-            || self.y > (self.h as f32 - 0.5)
-        {
+        if cx >= self.w as i32 || cx < 0 || cy < 0 || cy >= self.h as i32 {
             return None;
         }
 
@@ -322,20 +400,19 @@ fn raycast_distance(
     dx: f32,
     dy: f32,
     p: u16,
-    image: &image::ImageBuffer<image::Luma<u16>, Vec<u16>>,
+    image: &image::ImageBuffer<image::LumaA<u16>, Vec<u16>>,
     w: u32,
     h: u32,
 ) -> f32 {
-    let mut lastdist = 0;
     for (x, y, d) in make_ray(x, y, dx, dy, w, h) {
-        let np = image.get_pixel(x, y)[0];
-        lastdist = d;
+        let np = image.get_pixel(x, y)[1];
         if np != p {
-            return (if p == 0 { -1.0 } else { 1.0 }) * (d as f32 + np.abs_diff(p) as f32);
+            return (if p == 0 { 1.0 } else { -1.0 })
+                * (d as f32 + (np.abs_diff(p) as f32) / 0xffff as f32);
         }
     }
 
-    lastdist as f32
+    f32::MAX
 }
 
 fn make_ray(x: u32, y: u32, dx: f32, dy: f32, w: u32, h: u32) -> PixelRay {
