@@ -3,7 +3,8 @@ use std::{borrow::BorrowMut, error::Error, fmt::Display, fs::File, mem};
 use anyhow::{Context, Result};
 use clap::Parser;
 use gif::{Frame, Repeat};
-use image::{GenericImageView, ImageReader, Luma, Rgb, RgbImage};
+use image::{GenericImageView, ImageReader, Luma, LumaA, Rgb, RgbImage};
+use itertools::{chain, Itertools};
 use rayon::prelude::*;
 
 #[derive(Parser, Debug)]
@@ -84,21 +85,21 @@ fn main() -> Result<()> {
     let w = image1.width();
     let h = image2.height();
 
-    let sdf1 = generatesdf(&image1);
+    // let sdf1 = generatesdf(&image1);
 
-    println!("sdf1 generated");
+    //  // println!("sdf1 generated");
 
-    let sdfimg = rendersdf(&sdf1, w as usize);
+    //  // let sdfimg = rendersdf(&sdf1, w as usize);
 
-    sdfimg.save("./sdf1.png").unwrap();
+    //  // sdfimg.save("./sdf1.png").unwrap();
 
-    let sdf2 = generatesdf(&image2);
+    //  // let sdf2 = generatesdf(&image2);
 
-    println!("sdf2 generated");
+    //  // println!("sdf2 generated");
 
-    let sdfimg2 = rendersdf(&sdf2, w as usize);
+    //  // let sdfimg2 = rendersdf(&sdf2, w as usize);
 
-    sdfimg2.save("./sdf2.png").unwrap();
+    //  // sdfimg2.save("./sdf2.png").unwrap();
 
     let mut output = File::create(output).with_context(|| "failed to create output file")?;
 
@@ -111,7 +112,7 @@ fn main() -> Result<()> {
         .set_repeat(Repeat::Infinite)
         .with_context(|| "failed te set repeat on gif")?;
 
-    lerpsdfs(sdf1, sdf2, &mut output, 20, w, h).with_context(|| "failed to render gif")?;
+    lerpsdfs(&image1, &image2, &mut output, 20).with_context(|| "failed to render gif")?;
 
     Ok(())
 }
@@ -147,16 +148,12 @@ fn rendersdf(sdf1: &SDF, width: usize) -> RgbImage {
 }
 
 fn lerpsdfs(
-    sdf1: SDF,
-    sdf2: SDF,
+    image1: &image::ImageBuffer<image::LumaA<u16>, Vec<u16>>,
+    image2: &image::ImageBuffer<image::LumaA<u16>, Vec<u16>>,
     output: &mut gif::Encoder<&mut File>,
     frames: u32,
-    w: u32,
-    h: u32,
 ) -> Result<()> {
-    let mut changes_time = Vec::new();
-
-    add_changes(&sdf1, &sdf2, &mut changes_time, 1.0 / frames as f32);
+    let mut changes_time = add_changes(&image1, &image2, 1.0 / frames as f32);
 
     // radsort because I can't be bothered to write a sort_by function thing (also probaly faster so idc)
     radsort::sort_by_key(&mut changes_time, |(t, _, _)| *t);
@@ -164,11 +161,11 @@ fn lerpsdfs(
     let mut ct = 0.0;
     let dt = 1.0 / frames as f32;
 
-    let buffer = render(sdf1);
+    let buffer = decode_image(image1);
 
     let mut frame = Frame {
-        width: w as u16,
-        height: h as u16,
+        width: image1.width() as u16,
+        height: image1.height() as u16,
         buffer: std::borrow::Cow::Owned(buffer),
         ..Default::default()
     };
@@ -243,14 +240,31 @@ fn lerpsdfs(
     Ok(())
 }
 
-fn render(sdf1: SDF) -> Vec<u8> {
-    sdf1.data.iter().map(|f| result_pixel(*f)).collect()
+fn decode_image(image1: &image::ImageBuffer<LumaA<u16>, Vec<u16>>) -> Vec<u8> {
+    image1.pixels().map(|l| 0xff - (l[1] / 0x100) as u8).collect_vec()
 }
 
-fn add_changes(sdf1: &SDF, sdf2: &SDF, changes_time: &mut Vec<(f32, u8, usize)>, step_size: f32) {
-    for ((i, s), e) in sdf1.data.iter().enumerate().zip(sdf2.data.iter()) {
-        add_changes_pixel(*s, *e, changes_time, i, step_size);
-    }
+// fn render(sdf1: SDF) -> Vec<u8> {
+//     sdf1.data.iter().map(|f| result_pixel(*f)).collect()
+// }
+
+fn add_changes(
+    image1: &image::ImageBuffer<image::LumaA<u16>, Vec<u16>>,
+    image2: &image::ImageBuffer<image::LumaA<u16>, Vec<u16>>,
+    step_size: f32,
+) -> Vec<(f32, u8, usize)> {
+    image1
+        .par_enumerate_pixels()
+        .enumerate()
+        .zip(image2.par_pixels())
+        .flat_map_iter(|((loc, (x, y, s)), e)| {
+            add_changes_pixel(*s, *e, x, y, image1, image2, loc, step_size)
+        })
+        .collect::<Vec<_>>()
+
+    // for ((i, s), e) in sdf1.data.iter().enumerate().zip(sdf2.data.iter()) {
+    //     add_changes_pixel(*s, *e, changes_time, i, step_size);
+    // }
 }
 
 // v = (1 - i) * s + i * e
@@ -261,15 +275,15 @@ fn add_changes(sdf1: &SDF, sdf2: &SDF, changes_time: &mut Vec<(f32, u8, usize)>,
 
 fn result_pixel(p: f32) -> u8 {
     // if p <= -0.5 {
-        // 0x0
+    // 0x0
     // } else if p >= 0.5 {
-        // 0xff
+    // 0xff
     // } else {
-        // ((-p + 0.5) * 0xff as f32) as u8
+    // ((-p + 0.5) * 0xff as f32) as u8
     // }
     if p <= 0.0 {
         0x0
-    } else  {
+    } else {
         0xff
     }
 }
@@ -279,15 +293,21 @@ fn lerp_pixel(s: f32, e: f32, i: f32) -> u8 {
 }
 
 fn add_changes_pixel(
-    s: f32,
-    e: f32,
-    changes_time: &mut Vec<(f32, u8, usize)>,
+    s: LumaA<u16>,
+    e: LumaA<u16>,
+    x: u32,
+    y: u32,
+    image1: &image::ImageBuffer<image::LumaA<u16>, Vec<u16>>,
+    image2: &image::ImageBuffer<image::LumaA<u16>, Vec<u16>>,
     loc: usize,
     step_size: f32,
-) {
-    if result_pixel(e) == result_pixel(s) {
-        return;
+) -> Box<dyn Iterator<Item = (f32, u8, usize)>> {
+    if e == s {
+        return Box::new([].into_iter());
     }
+
+    let s = distance(x, y, s, image1);
+    let e = distance(x, y, e, image2);
 
     let crossings = [(0.5 - s) / (e - s), (-0.5 - s) / (e - s)]
         .into_iter()
@@ -297,16 +317,32 @@ fn add_changes_pixel(
     match &crossings[..] {
         [c] => {
             if s.abs() <= 0.5 {
-                for i in 0..=((c / step_size).floor() as u32) {
-                    let i = i as f32 * step_size;
-                    changes_time.push((i, lerp_pixel(s, e, i), loc))
-                }
-                changes_time.push((*c, result_pixel(e), loc))
+                Box::new(chain!(
+                    (0..=((c / step_size).floor() as u32)).map(move |i| {
+                        let i = i as f32 * step_size;
+                        (i, lerp_pixel(s, e, i), loc)
+                    }),
+                    [(*c, result_pixel(e), loc)]
+                ))
+                // changes_time.push((*c, result_pixel(e), loc))
+
+                // for i in 0..=((c / step_size).floor() as u32) {
+                // let i = i as f32 * step_size;
+                // changes_time.push((i, lerp_pixel(s, e, i), loc))
+                // }
             } else {
-                for i in ((c / step_size).floor() as u32)..=((1.0 / step_size).floor() as u32) {
-                    let i = i as f32 * step_size;
-                    changes_time.push((i, lerp_pixel(s, e, i), loc))
-                }
+                Box::new(
+                    (((c / step_size).floor() as u32)..=((1.0 / step_size).floor() as u32)).map(
+                        move |i| {
+                            let i = i as f32 * step_size;
+                            (i, lerp_pixel(s, e, i), loc)
+                        },
+                    ),
+                )
+                // for i in ((c / step_size).floor() as u32)..=((1.0 / step_size).floor() as u32) {
+                // let i = i as f32 * step_size;
+                // changes_time.push((i, lerp_pixel(s, e, i), loc))
+                // }
                 // changes_time.push((*c, result_pixel(e), loc))
             }
         }
@@ -320,13 +356,23 @@ fn add_changes_pixel(
 
             assert!(a <= b);
 
-            for i in ((a / step_size).floor() as u32)..=((b / step_size).floor() as u32) {
-                let i = i as f32 * step_size;
-                changes_time.push((i, lerp_pixel(s, e, i), loc))
-            }
-            changes_time.push((b, result_pixel(e), loc))
+            Box::new(chain!(
+                (((a / step_size).floor() as u32)..=((b / step_size).floor() as u32)).map(
+                    move |i| {
+                        let i = i as f32 * step_size;
+                        (i, lerp_pixel(s, e, i), loc)
+                    }
+                ),
+                [(b, result_pixel(e), loc)]
+            ))
+
+            // for i in ((a / step_size).floor() as u32)..=((b / step_size).floor() as u32) {
+            // let i = i as f32 * step_size;
+            // changes_time.push((i, lerp_pixel(s, e, i), loc))
+            // }
+            // changes_time.push((b, result_pixel(e), loc))
         }
-        [] => {}
+        [] => Box::new([].into_iter()),
         _ => {
             dbg!(crossings);
             panic!("not possible")
@@ -357,7 +403,7 @@ fn distance(
     }
 
     (0..NUM_ANGLES)
-        .into_par_iter() // parrell here is slower
+        // .into_par_iter() // parrell here is slower
         .map(|i| {
             let a = i as f32 / NUM_ANGLES as f32 * 2.0 * std::f32::consts::PI;
             let dx = a.cos();
@@ -366,8 +412,8 @@ fn distance(
             let d: f32 = raycast_distance(x, y, dx, dy, p[1], image, image.width(), image.height());
             d
         })
-        // .fold(f32::MAX, |a, b| a.min(b))
-        .reduce(|| f32::MAX, |a, b| if a.abs() < b.abs() {a} else {b})
+        .fold(f32::MAX, |a, b| if a.abs() < b.abs() { a } else { b })
+        //.reduce(|| f32::MAX, |a, b| if a.abs() < b.abs() { a } else { b })
 }
 
 struct PixelRay {
