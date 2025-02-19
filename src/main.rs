@@ -260,12 +260,17 @@ fn add_changes(sdf1: &SDF, sdf2: &SDF, changes_time: &mut Vec<(f32, u8, usize)>,
 // (0.5 - s)/(e - s) = i
 
 fn result_pixel(p: f32) -> u8 {
-    if p <= -0.5 {
+    // if p <= -0.5 {
+        // 0x0
+    // } else if p >= 0.5 {
+        // 0xff
+    // } else {
+        // ((-p + 0.5) * 0xff as f32) as u8
+    // }
+    if p <= 0.0 {
         0x0
-    } else if p >= 0.5 {
+    } else  {
         0xff
-    } else {
-        ((-p + 0.5) * 0xff as f32) as u8
     }
 }
 
@@ -292,28 +297,30 @@ fn add_changes_pixel(
     match &crossings[..] {
         [c] => {
             if s.abs() <= 0.5 {
-                for i in 0..((c / step_size).floor() as u32) {
+                for i in 0..=((c / step_size).floor() as u32) {
                     let i = i as f32 * step_size;
                     changes_time.push((i, lerp_pixel(s, e, i), loc))
                 }
                 changes_time.push((*c, result_pixel(e), loc))
             } else {
-                for i in ((c / step_size).floor() as u32)..((1.0 / step_size).ceil() as u32) {
+                for i in ((c / step_size).floor() as u32)..=((1.0 / step_size).floor() as u32) {
                     let i = i as f32 * step_size;
                     changes_time.push((i, lerp_pixel(s, e, i), loc))
                 }
-                changes_time.push((*c, result_pixel(e), loc))
+                // changes_time.push((*c, result_pixel(e), loc))
             }
         }
         [a, b] => {
             let mut a = *a;
             let mut b = *b;
 
-            if b >= a {
+            if a >= b {
                 mem::swap(&mut a, &mut b);
             }
 
-            for i in ((a / step_size).floor() as u32)..((b / step_size).ceil() as u32) {
+            assert!(a <= b);
+
+            for i in ((a / step_size).floor() as u32)..=((b / step_size).floor() as u32) {
                 let i = i as f32 * step_size;
                 changes_time.push((i, lerp_pixel(s, e, i), loc))
             }
@@ -352,7 +359,7 @@ fn distance(
     (0..NUM_ANGLES)
         .into_par_iter() // parrell here is slower
         .map(|i| {
-            let a = i as f32 / NUM_ANGLES as f32 * std::f32::consts::PI;
+            let a = i as f32 / NUM_ANGLES as f32 * 2.0 * std::f32::consts::PI;
             let dx = a.cos();
             let dy = a.sin();
 
@@ -360,7 +367,7 @@ fn distance(
             d
         })
         // .fold(f32::MAX, |a, b| a.min(b))
-        .reduce(|| f32::MAX, |a, b| a.min(b))
+        .reduce(|| f32::MAX, |a, b| if a.abs() < b.abs() {a} else {b})
 }
 
 struct PixelRay {
