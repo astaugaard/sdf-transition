@@ -261,26 +261,14 @@ fn add_changes(
             add_changes_pixel(*s, *e, x, y, image1, image2, loc, step_size)
         })
         .collect::<Vec<_>>()
-
-    // for ((i, s), e) in sdf1.data.iter().enumerate().zip(sdf2.data.iter()) {
-    //     add_changes_pixel(*s, *e, changes_time, i, step_size);
-    // }
 }
 
 // v = (1 - i) * s + i * e
 // v = s - i * s + i * e
 // v = s + (e - s) * i
-// 0.5 = s + (e - s) * i
-// (0.5 - s)/(e - s) = i
+// (v - s)/(e - s) = i
 
 fn result_pixel(p: f32) -> u8 {
-    // if p <= -0.5 {
-    // 0x0
-    // } else if p >= 0.5 {
-    // 0xff
-    // } else {
-    // ((-p + 0.5) * 0xff as f32) as u8
-    // }
     if p <= 0.0 {
         0x0
     } else {
@@ -324,12 +312,6 @@ fn add_changes_pixel(
                     }),
                     [(*c, result_pixel(e), loc)]
                 ))
-                // changes_time.push((*c, result_pixel(e), loc))
-
-                // for i in 0..=((c / step_size).floor() as u32) {
-                // let i = i as f32 * step_size;
-                // changes_time.push((i, lerp_pixel(s, e, i), loc))
-                // }
             } else {
                 Box::new(
                     (((c / step_size).floor() as u32)..=((1.0 / step_size).floor() as u32)).map(
@@ -339,11 +321,6 @@ fn add_changes_pixel(
                         },
                     ),
                 )
-                // for i in ((c / step_size).floor() as u32)..=((1.0 / step_size).floor() as u32) {
-                // let i = i as f32 * step_size;
-                // changes_time.push((i, lerp_pixel(s, e, i), loc))
-                // }
-                // changes_time.push((*c, result_pixel(e), loc))
             }
         }
         [a, b] => {
@@ -365,12 +342,6 @@ fn add_changes_pixel(
                 ),
                 [(b, result_pixel(e), loc)]
             ))
-
-            // for i in ((a / step_size).floor() as u32)..=((b / step_size).floor() as u32) {
-            // let i = i as f32 * step_size;
-            // changes_time.push((i, lerp_pixel(s, e, i), loc))
-            // }
-            // changes_time.push((b, result_pixel(e), loc))
         }
         [] => Box::new([].into_iter()),
         _ => {
@@ -403,7 +374,6 @@ fn distance(
     }
 
     (0..NUM_ANGLES)
-        // .into_par_iter() // parrell here is slower
         .map(|i| {
             let a = i as f32 / NUM_ANGLES as f32 * 2.0 * std::f32::consts::PI;
             let dx = a.cos();
@@ -413,7 +383,6 @@ fn distance(
             d
         })
         .fold(f32::MAX, |a, b| if a.abs() < b.abs() { a } else { b })
-        //.reduce(|| f32::MAX, |a, b| if a.abs() < b.abs() { a } else { b })
 }
 
 struct PixelRay {
